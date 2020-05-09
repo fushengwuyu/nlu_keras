@@ -20,6 +20,7 @@ import random
 from tqdm import tqdm
 import numpy as np
 import os
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 config_path = '/home/chenbing/pretrain_models/electra/chinese_electra_base_L-12_H-768_A-12/electra_config.json'
@@ -276,21 +277,17 @@ class Evaluator(keras.callbacks.Callback):
 
 
 if __name__ == '__main__':
+    # 训练
+    train_D = MyDataGenerator(train_data, batch_size)
+    evalutor = Evaluator()
 
-    train_model.load_weights('best_model.h5')
+    train_model.fit_generator(train_D.forfit(), epochs=500, steps_per_epoch=len(train_D), callbacks=[evalutor])
 
-    # train_D = MyDataGenerator(train_data, batch_size)
-    # evalutor = Evaluator()
-    #
-    # train_model.fit_generator(train_D.forfit(), epochs=500, steps_per_epoch=len(train_D), callbacks=[evalutor])
-    # train_model.save('best_model.h5')
-
-    # train_model.load_weights('best_model.h5')
+    # 预测
     # text = '打开江苏卫视'
     # result = extract_item(text)
-    # i = set(result)
-    # print(result)
 
-    f1, precision, recall = evalute(valid_data)
-    print(
-        'f1: %0.5f, precision: %0.5f, recall: %.5f \n' % (f1, precision, recall))
+    # 测试
+    # f1, precision, recall = evalute(valid_data)
+    # print(
+    #     'f1: %0.5f, precision: %0.5f, recall: %.5f \n' % (f1, precision, recall))
