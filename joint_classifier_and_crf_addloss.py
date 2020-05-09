@@ -21,13 +21,19 @@ from tqdm import tqdm
 import numpy as np
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-config_path = '/home/chenbing/pretrain_models/electra/chinese_electra_base_L-12_H-768_A-12/electra_config.json'
-checkpoint_path = '/home/chenbing/pretrain_models/electra/chinese_electra_base_L-12_H-768_A-12/electra_base'
-vocab_path = '/home/chenbing/pretrain_models/electra/chinese_electra_base_L-12_H-768_A-12/vocab.txt'
+# config_path = '/home/chenbing/pretrain_models/electra/chinese_electra_base_L-12_H-768_A-12/electra_config.json'
+# checkpoint_path = '/home/chenbing/pretrain_models/electra/chinese_electra_base_L-12_H-768_A-12/electra_base'
+# vocab_path = '/home/chenbing/pretrain_models/electra/chinese_electra_base_L-12_H-768_A-12/vocab.txt'
 
+config_path = '/home/chenbing/pretrain_models/roberta/chinese_roberta_L-6_H-384_A-12_K-128/bert_config.json'
+checkpoint_path = '/home/chenbing/pretrain_models/roberta/chinese_roberta_L-6_H-384_A-12_K-128/bert_model.ckpt'
+vocab_path = '/home/chenbing/pretrain_models/roberta/chinese_roberta_L-6_H-384_A-12_K-128/vocab.txt'
+
+model_path = 'best_model_addloss.h5'
 batch_size = 32
+epochs = 20
 intent_num = 23
 domain_num = 29
 slot_num = 119
@@ -99,20 +105,20 @@ class MyDataGenerator(DataGenerator):
                 Y2 = sequence_padding(Y2)
                 Y3 = sequence_padding(Y3)
 
-                yield [batch_token_ids, batch_segment_ids], [Y1, Y2, Y3]
+                yield [batch_token_ids, batch_segment_ids, Y1, Y2, Y3], None
                 batch_token_ids, batch_segment_ids, Y1, Y2, Y3 = [], [], [], [], []
 
 
 # 补充输入
-# intent_labels = Input(shape=(intent_num,), name='intent_labels')
-# domain_labels = Input(shape=(domain_num,), name='domain_labels')
-# slot_labels = Input(shape=(None, slot_num), name='slot_labels')
+intent_labels = Input(shape=(1,), name='intent_labels')
+domain_labels = Input(shape=(1,), name='domain_labels')
+slot_labels = Input(shape=(None,), name='slot_labels')
 
 # 搭建网络
 electra_model = build_transformer_model(
     config_path=config_path,
     checkpoint_path=checkpoint_path,
-    model='electra',
+    model='bert',
     return_keras_model=False
 )
 
@@ -136,25 +142,28 @@ slot_model = Model(electra_model.input, slot_output)
 
 # 训练模型
 train_model = Model(
-    # electra_model.input + [intent_labels, domain_labels, slot_labels],
-    electra_model.model.input,
+    electra_model.input + [domain_labels, intent_labels, slot_labels],
     [domain_output, intent_output, slot_output]
 )
 
-loss = {
-    "domain_classifier": 'sparse_categorical_crossentropy',
-    "intent_classifier": 'sparse_categorical_crossentropy',
-    'slots_tagger': CRF.sparse_loss
-}
+mask = Lambda(lambda x: K.cast(K.greater(x, 0), 'float32'))(slot_labels)
 
-weight = {
-    "domain_classifier": 1.0,
-    "intent_classifier": 1.0,
-    'slots_tagger': 3.0
-}
+# intent_loss
+intent_loss = K.sparse_categorical_crossentropy(intent_labels, intent_output)
+
+# domain_loss
+domain_loss = K.sparse_categorical_crossentropy(domain_labels, domain_output)
+
+# slot_loss
+slot_loss = CRF.sparse_loss(slot_labels, slot_output)
+
+# 组合loss
+loss = intent_loss + domain_loss + 3 * slot_loss
+
+train_model.add_loss(loss)
 
 optimizer = AdaFactor(learning_rate=1e-3)
-train_model.compile(optimizer=optimizer, loss=loss, loss_weights=weight)
+train_model.compile(optimizer=optimizer)
 train_model.summary()
 
 
@@ -241,30 +250,32 @@ class Evaluator(keras.callbacks.Callback):
 
     def __init__(self):
         self.best_val_f1 = 0.
+        self.f1s = []
 
     def on_epoch_end(self, epoch, logs=None):
         f1, precision, recall = evalute(valid_data)
+        self.f1s.append(f1)
         if f1 >= self.best_val_f1:
             self.best_val_f1 = f1
-            train_model.save('best_model.h5')
+            train_model.save(model_path)
 
         print(
             'f1: %0.5f, precision: %0.5f, recall: %.5f, best f1: %.5f  \n' % (f1, precision, recall, self.best_val_f1))
 
 
 if __name__ == '__main__':
-
     # 训练
     train_D = MyDataGenerator(train_data, batch_size)
     evalutor = Evaluator()
 
-    train_model.fit_generator(train_D.forfit(), epochs=500, steps_per_epoch=len(train_D), callbacks=[evalutor])
-
+    train_model.fit_generator(train_D.forfit(), epochs=epochs, steps_per_epoch=len(train_D), callbacks=[evalutor])
+    print(evalutor.f1s)
     # 预测
     # text = '打开江苏卫视'
     # result = extract_item(text)
 
     # 测试
+    # train_model.load_weights('best_model.h5')
     # f1, precision, recall = evalute(valid_data)
     # print(
     #     'f1: %0.5f, precision: %0.5f, recall: %.5f \n' % (f1, precision, recall))
